@@ -1,4 +1,5 @@
 import json
+import os
 
 import numpy as np
 import torch
@@ -79,3 +80,17 @@ class WindowDataset(torch.utils.data.Dataset):
         x = torch.tensor(window[:N_IN], dtype=torch.float32)
         y = torch.tensor(window[N_IN:], dtype=torch.float32)
         return x, y
+
+
+def build_or_load_windows(datasets, stepsize, test_json_path):
+    tag = "".join(datasets) + f"_s{stepsize}"
+    path = os.path.join(config.cache_dir(), f"windows_{tag}.npy")
+    if os.path.exists(path):
+        return np.load(path)
+    parts = [
+        build_windows_for_dataset(dataset, stepsize, test_json_path)
+        for dataset in datasets
+    ]
+    windows = np.concatenate(parts, axis=0).astype(np.float32)
+    np.save(path, windows)
+    return windows
