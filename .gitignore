@@ -17,8 +17,9 @@ cache/
 forecasting/cache/
 .worktrees/
 
-# the dataset itself is never committed (lives on the mounted drive)
-data/
+# the dataset itself is never committed (lives on the mounted drive).
+# NOTE: anchored to repo root so it does NOT match the source dir hik/data/
+/data/
 hik_dataset/
 
 # Byte-compiled / optimized / DLL files
