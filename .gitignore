@@ -15,6 +15,7 @@ checkpoints/
 *.pt
 cache/
 forecasting/cache/
+.worktrees/
 
 # the dataset itself is never committed (lives on the mounted drive)
 data/
