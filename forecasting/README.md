@@ -143,19 +143,29 @@ Expected output:
 ## Evaluate siMLPe
 
 ```bash
-export HIK_DATA="$HOME/Humans_in_Kitchen/Humans_in_Kitchen"
+export HIK_DATA="$HOME/Humans_in_Kitchen"
 python -m forecasting.evaluate --dataset A --model simlpe --ckpt forecasting/cache/simlpe.pt
 ```
 
-Record the overall mean and `@1s`, `@5s`, `@10s` values here after the remote run:
+### Result (2026-06-26, trained A+B+C+D, stepsize 50, 80 epochs, 10,299 windows, Tesla T4)
 
-```text
-siMLPe on A:
-overall mean MPJPE: TBD
-  @1s: TBD
-  @5s: TBD
-  @10s: TBD
-```
+siMLPe **does not beat** the zero-velocity baseline yet — it is slightly worse at
+every horizon, including @1s where a competent short-term model should win:
+
+| horizon | zero-velocity | siMLPe |
+|---------|--------------:|-------:|
+| overall | **1.108**     | 1.188  |
+| @1s     | **0.520**     | 0.607  |
+| @5s     | **1.254**     | 1.351  |
+| @10s    | **1.422**     | 1.472  |
+
+Val loss flatlined early (0.106 @ epoch 29 → 0.104 @ epoch 80). Diagnosis:
+**underfitting / mean-collapse** — the model learned roughly "repeat the last frame
++ small noisy deltas" rather than real dynamics (not a denormalization bug, which
+would produce huge MPJPE). The pipeline is correct end-to-end; the model/loss/hparams
+need iteration to clear the baseline. Candidate levers: lower LR + more epochs/capacity,
+reduce or reweight the velocity loss, stronger architecture, and reconsider predicting
+all 250 frames at once under plain MPJPE (encourages mean-collapse at long horizons).
 
 ## Stop Or Delete The VM
 
