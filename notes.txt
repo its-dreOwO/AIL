@@ -1,0 +1,78 @@
+
+What this project is
+
+hik is the official data API + evaluation toolkit for the NeurIPS 2023 dataset "Humans in Kitchens" (HiK). It is not a model — it ships no neural network. It's the loader, visualizer, and benchmark harness that lets researchers train/evaluate their own multi-person 3D human-motion forecasting models on the dataset. The research problem: given the recent motion of everyone in a kitchen plus the scene geometry, predict where their bodies go next.
+
+---
+Inputs (the dataset on disk)
+
+Everything keys off four kitchen recordings labelled A, B, C, D, captured at 25 Hz. The downloaded data/ folder has three parts:
+
+1. poses/{dataset}_{pid}_{seqid}.npz — one file per person-sequence. Each .npz holds, per frame:
+  - poses3d — n × 29 × 3 3D skeleton joints (the 29-joint layout shown in the README).
+  - smpl — n × 21 × 3 SMPL-X body-part rotations (axis-angle / rvec).
+  - transforms — n × 6 global body placement = 3 location + 3 rotation (the root location I used for movement trails).
+  - act — n × 82 multi-hot activity labels (82 activities like "make coffee", "walking").
+  - betas — 10 SMPL-X body-shape parameters (per person, constant).
+  - frames — the integer frame indices this sequence covers (contiguous runs, 25 Hz).
+2. scenes/{dataset}_scene/{object}.npy + .json — scene geometry. Each kitchen object (table, sink, coffee machine, cupboard, dishwasher, whiteboard, trash, occluder…) has a .npy of 3D geometry over time and a .json of metadata (shape, type, frame_multiplier). Geometry is dynamic — objects like drawers/chairs move, so geometry is indexed per frame.
+3. body_models/SMPLX_NEUTRAL.npz — the standard SMPL-X parametric body model, used to turn pose parameters into an actual 3D mesh.
+
+There's also a fourth input for benchmarking: testdata/test.json — the official test split. It's {A,B,C,D} → {action → [{pid, frame}, …]} listing exactly which person and which moment to forecast, grouped by 6 evaluation actions (walking, sitting_down, whiteboard, sink, cupboard, coffee). Kitchen A's "walking" alone has 231 test cases.
+
+---
+Core systems (the code)
+
+The package is four sub-modules:
+
+1. hik.data — loading & indexing (the heart)
+
+- PersonSequence wraps one person's .npz. On construction it builds frame2index/index2frame lookups, computes a content hash uid, and lazily converts rotations to quaternions (cached to tempfiles). Key methods: get_frame(frame), get_range3d(start,end) (returns poses + a validity mask for gaps), get_frames_where_action([...]).
+- PersonSequences loads all .npz files and builds three dictionaries for fast access: by dataset, by (dataset, pid), and by (dataset, frame) — the last is what makes get_frame(dataset, frame) return everyone visible at a moment in O(1). get_block3d(start,end) produces a dense n_frames × n_person × 29 × 3 tensor + mask.
+- Kitchen / KitchenObject load scene geometry. load_for_dataset thread-loads every object .npy, attaches per-dataset x/y limits and "out-of-bound" filler boxes, and colors objects by type. frame_multiplier controls time indexing: 0 = static object (cupboard), 2 = annotated at 12.5 Hz so it's doubled to 25 Hz. get_environment(frame) returns objects as point-cloud/box EnvironmentObjects with is_inside() collision tests (used to know which object a hand is touching).
+- Scene is the "everything assembled" view: it materializes the whole recording into dense arrays poses3d / masks / activities / transforms / smpls / betas and offers get_splits(length, stepsize) to chop the recording into fixed-length training windows.
+- utils: frames2segments (turn a frame list into contiguous (start,end) runs) and get_splits (sliding windows that never cross gaps) — these have real unit tests.
+
+2. hik.transforms — normalization & rotation math
+
+Axis-angle ↔ quaternion conversion (rotation.py) and normalize() — re-centers/re-orients a motion clip to a canonical frame (e.g. pelvis at origin, facing forward via left/right hip joints). Standard preprocessing so a model isn't sensitive to absolute world position.
+
+3. hik.data.smpl.Body — parametric body model
+
+Wraps smplx.SMPLX. Turns (betas, pose, translation, rotation) into a posed 3D mesh/joints, plus rigid-alignment helpers (find_transformation via SVD/Kabsch) to map raw 3D poses into SMPL canonical space. This is the bridge from "joint coordinates" to "actual body surface."
+
+4. hik.eval — the benchmark harness
+
+- Evaluator loads test.json + the kitchen + person sequences. Its execute3d(callback_fn, n_in=250, n_out=250) is the standard forecasting protocol: for each test (pid, frame), it assembles 10 s of past motion (n_in=25×10) for all people present, calls your model's callback_fn, and compares your predicted 10 s future against ground truth. It hands the callback the past poses, masks, the kitchen, and pids — so models can use scene context.
+- mpjpe.py — Mean Per-Joint Position Error, the accuracy metric (mean L2 distance per joint).
+- longterm.py — long-horizon evaluation built on the external ndms library (the README's second install); uses "motion words" and normalization for diversity/realism scoring rather than raw position error.
+
+---
+How data flows (end to end)
+
+Loading / visualization path (what examples.py, smoke_test.py, and my animate.py use):
+.npz/.npy on disk
+  → PersonSequences + Kitchen.load_for_dataset
+  → get_frame(dataset, frame)  →  list of {pose3d, smpl, transforms, act, pid}
+  → kitchen.plot(ax, frame) + plot_pose(ax, pose3d)   →  matplotlib 3D render → PNG/MP4
+
+Benchmark path (what a researcher with a model uses):
+test.json  → Evaluator.execute3d(my_model_fn, n_in=250, n_out=250)
+  → for each (pid, frame): gather 250 past frames of everyone present (+ masks, kitchen)
+  → my_model_fn predicts next 250 frames
+  → results dict  → calc_mpjpe / ndms long-term metrics  → score
+
+---
+Outputs
+
+- Visualizations — 3D matplotlib renders of scene + skeletons; PNG stills (render_*.png, smoke_render.png) and MP4/GIF animations (the anim_*.mp4 I built, via the to_mp4 helper or ffmpeg).
+- Structured arrays — dense pose/mask/activity/transform tensors for training (Scene.get_splits, get_block3d).
+- Benchmark results — a results dict (predicted vs. ground-truth futures) saved via eval.save_results (pickle) and scored into MPJPE (short-term) and NDMS-based (long-term) numbers.
+
+---
+A few things worth flagging
+
+- The repo intentionally has no forecasting model — you bring your own and plug it into execute3d's callback. That's the design.
+- calc_mpjpe in eval/mpjpe.py is currently a stub (pass with commented-out body) — the working metric primitive is mean_per_joint_l2_distance; the orchestration around it is unfinished in this checkout.
+- Long-term eval requires the external ndms package, which isn't a setup.py dependency — you must pip install git+https://github.com/jutanke/ndms.git separately.
+- smoke_test.py imports torch but setup.py lists smplx (which pulls torch) without naming torch directly — it happens to be installed in your venv.
