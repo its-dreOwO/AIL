@@ -5,7 +5,7 @@ from os.path import dirname
 import numpy as np
 import torch
 
-from hik.data import Scene
+from hik.data import Scene, get_splits as frame_splits
 from hik.transforms.utils import normalize3d
 from forecasting import config
 from forecasting.config import (
@@ -46,19 +46,26 @@ def build_windows_for_dataset(dataset, stepsize, test_json_path, max_windows=Non
         scene_path=scenes_path(),
         smplx_path=dirname(smplx_path()),
     )
-    splits = scene.get_splits(length=WINDOW, stepsize=stepsize)
-    poses3d = splits["poses3d"]
-    masks = splits["masks"]
-    starts = splits["start_frames"]
+    # Slice windows directly from the Scene's raw per-frame arrays.
+    # Do NOT use Scene.get_splits here: it densely materializes *every*
+    # overlapping window (at stepsize 50 each frame lands in ~10 windows, and it
+    # also expands smpls/transforms/activities we never use), which balloons to
+    # tens of GB and OOMs even a 29GB box. Slicing the raw [n_frames, P, 29, 3]
+    # array keeps peak memory at one Scene (~6GB) plus the kept clean windows.
+    poses3d = scene.poses3d          # [n_frames, P, 29, 3], absolute-frame indexed
+    masks = scene.masks              # [n_frames, P]
+    starts = frame_splits(scene.frames, length=WINDOW, stepsize=stepsize)
+    n_person = masks.shape[1]
 
     windows = []
-    for seq_idx in range(masks.shape[0]):
-        start = int(starts[seq_idx])
-        for person_idx in range(masks.shape[2]):
-            if not window_is_clean(start, masks[seq_idx, :, person_idx], forbidden):
+    for start in starts:
+        sl = slice(start, start + WINDOW)
+        if masks[sl].shape[0] != WINDOW:
+            continue
+        for person_idx in range(n_person):
+            if not window_is_clean(start, masks[sl, person_idx], forbidden):
                 continue
-            window = poses3d[seq_idx, :, person_idx]
-            block = window[:, None]
+            block = poses3d[sl, person_idx][:, None]   # [WINDOW, 1, 29, 3]
             try:
                 normed, _ = normalize3d(block, frame=N_IN - 1)
             except ValueError:
