@@ -1,5 +1,6 @@
 import json
 import os
+from os.path import dirname
 
 import numpy as np
 import torch
@@ -43,7 +44,7 @@ def build_windows_for_dataset(dataset, stepsize, test_json_path, max_windows=Non
         dataset=dataset,
         person_path=poses_path(),
         scene_path=scenes_path(),
-        smplx_path=smplx_path(),
+        smplx_path=dirname(smplx_path()),
     )
     splits = scene.get_splits(length=WINDOW, stepsize=stepsize)
     poses3d = splits["poses3d"]
