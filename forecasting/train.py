@@ -10,7 +10,9 @@ from forecasting.losses import horizon_weights, mpjpe_loss, velocity_loss
 from forecasting.model import SiMLPe
 
 
-def train_one_epoch(model, loader, optim, device, vel_weight=1.0, pos_w=None, vel_w=None):
+def train_one_epoch(
+    model, loader, optim, device, vel_weight=1.0, pos_w=None, vel_w=None
+):
     model.train()
     total, n = 0.0, 0
     for x, y in loader:
@@ -86,9 +88,22 @@ def train(
     hist = {"train_loss": [], "val_loss": [], "best_val": float("inf"), "ckpt": None}
     for epoch in range(epochs):
         train_loss = train_one_epoch(
-            model, train_loader, optim, device, vel_weight, pos_w, vel_w
+            model,
+            train_loader,
+            optim,
+            device,
+            vel_weight=vel_weight,
+            pos_w=pos_w,
+            vel_w=vel_w,
         )
-        val_loss = eval_loss(model, val_loader, device, vel_weight, pos_w, vel_w)
+        val_loss = eval_loss(
+            model,
+            val_loader,
+            device,
+            vel_weight=vel_weight,
+            pos_w=pos_w,
+            vel_w=vel_w,
+        )
         sched.step()
         hist["train_loss"].append(train_loss)
         hist["val_loss"].append(val_loss)
