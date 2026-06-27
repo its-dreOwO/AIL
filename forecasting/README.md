@@ -177,15 +177,26 @@ all 250 frames at once under plain MPJPE (encourages mean-collapse at long horiz
 ### Result (2026-06-27 retrain — horizon-weighted loss)
 
 Config: `lr 5e-4`, `vel_weight 0.2`, `horizon_floor 0.2` (gentle linear decay
-1.0 → 0.2), otherwise A+B+C+D, stepsize 50, 80 epochs. Beat-the-bar target:
-overall < 1.108. Fill in after the VM retrain.
+1.0 → 0.2), otherwise A+B+C+D, stepsize 50, 80 epochs, Tesla T4 (reused the
+`windows_ABCD_s50.npy` cache). Target was overall < 1.108 — **not met.**
 
-| horizon | zero-velocity | siMLPe (weighted) |
-|---------|--------------:|------------------:|
-| overall | **1.108**     | TBD               |
-| @1s     | **0.520**     | TBD               |
-| @5s     | **1.254**     | TBD               |
-| @10s    | **1.422**     | TBD               |
+| horizon | zero-velocity | siMLPe (weighted) | siMLPe (2026-06-26) |
+|---------|--------------:|------------------:|--------------------:|
+| overall | **1.108**     | 1.184             | 1.188               |
+| @1s     | **0.520**     | 0.572             | 0.607               |
+| @5s     | **1.254**     | 1.348             | 1.351               |
+| @10s    | **1.422**     | 1.462             | 1.472               |
+
+Horizon weighting + lower LR **improved every horizon vs the 2026-06-26 run**
+(most at @1s, 0.607 → 0.572, exactly where the near-term weighting was aimed) but
+still **loses to zero-velocity at every horizon.** The epoch trajectory shows why:
+val loss collapses to ~0.099 by epoch 5 and only crawls to 0.092 by epoch 80 —
+the same near-instant **mean-collapse**. This confirms the failure is **structural,
+not a hyperparameter issue**: predicting all 250 frames jointly under a (still
+position-space) MPJPE rewards regressing toward the mean. The next lever is the
+deferred one from the spec — reframe the model output (predict velocity/deltas
+from the last frame, and/or a shorter autoregressive horizon) rather than tune the
+loss weighting further.
 
 ## Stop Or Delete The VM
 
