@@ -107,7 +107,9 @@ def main():
     parser.add_argument("--stepsize", type=int, default=50)
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--lr", type=float, default=3e-3)
+    parser.add_argument("--lr", type=float, default=5e-4)
+    parser.add_argument("--vel-weight", type=float, default=0.2)
+    parser.add_argument("--horizon-floor", type=float, default=0.2)
     parser.add_argument("--n-blocks", type=int, default=4)
     args = parser.parse_args()
 
@@ -119,6 +121,8 @@ def main():
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
+        vel_weight=args.vel_weight,
+        horizon_floor=args.horizon_floor,
         n_blocks=args.n_blocks,
     )
 
