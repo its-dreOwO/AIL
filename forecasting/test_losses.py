@@ -26,5 +26,41 @@ class TestHorizonWeights(unittest.TestCase):
         self.assertTrue(torch.all(w[1:] <= w[:-1] + 1e-9))
 
 
+from forecasting.losses import mpjpe_loss
+from forecasting.config import POSE_DIM
+
+
+class TestWeightedMpjpe(unittest.TestCase):
+    def _pair(self, t=10):
+        torch.manual_seed(0)
+        target = torch.zeros(2, t, POSE_DIM)
+        pred = torch.zeros(2, t, POSE_DIM)
+        return pred, target
+
+    def test_floor_one_equals_unweighted(self):
+        torch.manual_seed(1)
+        pred = torch.randn(2, 10, POSE_DIM)
+        target = torch.randn(2, 10, POSE_DIM)
+        plain = mpjpe_loss(pred, target)
+        weighted = mpjpe_loss(pred, target, weights=horizon_weights(10, floor=1.0))
+        self.assertAlmostEqual(plain.item(), weighted.item(), places=5)
+
+    def test_late_error_downweighted(self):
+        # error only in the LAST frame -> weighting should LOWER the loss
+        pred, target = self._pair(t=10)
+        pred[:, -1, :] = 1.0
+        plain = mpjpe_loss(pred, target)
+        weighted = mpjpe_loss(pred, target, weights=horizon_weights(10, floor=0.2))
+        self.assertLess(weighted.item(), plain.item())
+
+    def test_early_error_upweighted(self):
+        # error only in the FIRST frame -> weighting should RAISE the loss
+        pred, target = self._pair(t=10)
+        pred[:, 0, :] = 1.0
+        plain = mpjpe_loss(pred, target)
+        weighted = mpjpe_loss(pred, target, weights=horizon_weights(10, floor=0.2))
+        self.assertGreater(weighted.item(), plain.item())
+
+
 if __name__ == "__main__":
     unittest.main()

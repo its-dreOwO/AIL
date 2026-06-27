@@ -19,8 +19,17 @@ def _per_joint_l2(pred, target):
     return torch.linalg.norm(p - g, dim=-1)
 
 
-def mpjpe_loss(pred, target):
-    return _per_joint_l2(pred, target).mean()
+def _weighted_time_mean(curve, weights):
+    # curve: [B, T, N_JOINTS]; weights: [T] or None
+    if weights is None:
+        return curve.mean()
+    per_frame = curve.mean(dim=(0, 2))            # [T]
+    w = weights.to(per_frame.device)
+    return (per_frame * w).sum() / w.sum()
+
+
+def mpjpe_loss(pred, target, weights=None):
+    return _weighted_time_mean(_per_joint_l2(pred, target), weights)
 
 
 def velocity_loss(pred, target):
