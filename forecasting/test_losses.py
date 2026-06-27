@@ -62,5 +62,28 @@ class TestWeightedMpjpe(unittest.TestCase):
         self.assertGreater(weighted.item(), plain.item())
 
 
+from forecasting.losses import velocity_loss
+
+
+class TestWeightedVelocity(unittest.TestCase):
+    def test_floor_one_equals_unweighted(self):
+        torch.manual_seed(2)
+        pred = torch.randn(2, 10, POSE_DIM)
+        target = torch.randn(2, 10, POSE_DIM)
+        plain = velocity_loss(pred, target)
+        # velocity curve length is T-1 = 9
+        weighted = velocity_loss(pred, target, weights=horizon_weights(9, floor=1.0))
+        self.assertAlmostEqual(plain.item(), weighted.item(), places=5)
+
+    def test_late_error_downweighted(self):
+        # a single late position jump -> velocity error concentrated at the end
+        target = torch.zeros(2, 10, POSE_DIM)
+        pred = torch.zeros(2, 10, POSE_DIM)
+        pred[:, -1, :] = 1.0
+        plain = velocity_loss(pred, target)
+        weighted = velocity_loss(pred, target, weights=horizon_weights(9, floor=0.2))
+        self.assertLess(weighted.item(), plain.item())
+
+
 if __name__ == "__main__":
     unittest.main()

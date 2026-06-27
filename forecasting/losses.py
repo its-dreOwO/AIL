@@ -32,7 +32,7 @@ def mpjpe_loss(pred, target, weights=None):
     return _weighted_time_mean(_per_joint_l2(pred, target), weights)
 
 
-def velocity_loss(pred, target):
+def velocity_loss(pred, target, weights=None):
     dp = pred[:, 1:, :] - pred[:, :-1, :]
     dg = target[:, 1:, :] - target[:, :-1, :]
-    return _per_joint_l2(dp, dg).mean()
+    return _weighted_time_mean(_per_joint_l2(dp, dg), weights)
