@@ -6,18 +6,20 @@ from torch.utils.data import DataLoader, random_split
 
 from forecasting import config
 from forecasting.data import WindowDataset, build_or_load_windows
-from forecasting.losses import mpjpe_loss, velocity_loss
+from forecasting.losses import horizon_weights, mpjpe_loss, velocity_loss
 from forecasting.model import SiMLPe
 
 
-def train_one_epoch(model, loader, optim, device, vel_weight=1.0):
+def train_one_epoch(model, loader, optim, device, vel_weight=1.0, pos_w=None, vel_w=None):
     model.train()
     total, n = 0.0, 0
     for x, y in loader:
         x, y = x.to(device), y.to(device)
         optim.zero_grad()
         pred = model(x)
-        loss = mpjpe_loss(pred, y) + vel_weight * velocity_loss(pred, y)
+        loss = mpjpe_loss(pred, y, weights=pos_w) + vel_weight * velocity_loss(
+            pred, y, weights=vel_w
+        )
         loss.backward()
         optim.step()
         total += loss.item() * x.shape[0]
@@ -26,13 +28,15 @@ def train_one_epoch(model, loader, optim, device, vel_weight=1.0):
 
 
 @torch.no_grad()
-def eval_loss(model, loader, device, vel_weight=1.0):
+def eval_loss(model, loader, device, vel_weight=1.0, pos_w=None, vel_w=None):
     model.eval()
     total, n = 0.0, 0
     for x, y in loader:
         x, y = x.to(device), y.to(device)
         pred = model(x)
-        loss = mpjpe_loss(pred, y) + vel_weight * velocity_loss(pred, y)
+        loss = mpjpe_loss(pred, y, weights=pos_w) + vel_weight * velocity_loss(
+            pred, y, weights=vel_w
+        )
         total += loss.item() * x.shape[0]
         n += x.shape[0]
     return total / max(n, 1)
@@ -43,9 +47,10 @@ def train(
     *,
     epochs,
     batch_size=256,
-    lr=3e-3,
+    lr=5e-4,
     val_frac=0.05,
-    vel_weight=1.0,
+    vel_weight=0.2,
+    horizon_floor=0.2,
     device=None,
     n_blocks=4,
     seed=0,
@@ -75,11 +80,15 @@ def train(
     ).to(device)
     optim = torch.optim.Adam(model.parameters(), lr=lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=epochs)
+    pos_w = horizon_weights(config.N_OUT, horizon_floor, device=device)
+    vel_w = horizon_weights(config.N_OUT - 1, horizon_floor, device=device)
 
     hist = {"train_loss": [], "val_loss": [], "best_val": float("inf"), "ckpt": None}
     for epoch in range(epochs):
-        train_loss = train_one_epoch(model, train_loader, optim, device, vel_weight)
-        val_loss = eval_loss(model, val_loader, device, vel_weight)
+        train_loss = train_one_epoch(
+            model, train_loader, optim, device, vel_weight, pos_w, vel_w
+        )
+        val_loss = eval_loss(model, val_loader, device, vel_weight, pos_w, vel_w)
         sched.step()
         hist["train_loss"].append(train_loss)
         hist["val_loss"].append(val_loss)
