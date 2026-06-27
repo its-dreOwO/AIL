@@ -131,8 +131,15 @@ overall mean MPJPE: 1.1080
 
 ```bash
 export HIK_DATA="$HOME/Humans_in_Kitchen/Humans_in_Kitchen"
-python -m forecasting.train --datasets A B C D --stepsize 50 --epochs 80
+python -m forecasting.train \
+  --datasets A B C D --stepsize 50 --epochs 80 \
+  --lr 5e-4 --vel-weight 0.2 --horizon-floor 0.2
 ```
+
+`--horizon-floor` controls the gentle linear loss weighting (1.0 at the first
+predicted frame down to the floor at the last); `--horizon-floor 1.0` recovers
+the old uniform MPJPE. `--vel-weight` scales the velocity term (was hard-wired
+to 1.0 before).
 
 Expected output:
 
@@ -166,6 +173,19 @@ would produce huge MPJPE). The pipeline is correct end-to-end; the model/loss/hp
 need iteration to clear the baseline. Candidate levers: lower LR + more epochs/capacity,
 reduce or reweight the velocity loss, stronger architecture, and reconsider predicting
 all 250 frames at once under plain MPJPE (encourages mean-collapse at long horizons).
+
+### Result (2026-06-27 retrain — horizon-weighted loss)
+
+Config: `lr 5e-4`, `vel_weight 0.2`, `horizon_floor 0.2` (gentle linear decay
+1.0 → 0.2), otherwise A+B+C+D, stepsize 50, 80 epochs. Beat-the-bar target:
+overall < 1.108. Fill in after the VM retrain.
+
+| horizon | zero-velocity | siMLPe (weighted) |
+|---------|--------------:|------------------:|
+| overall | **1.108**     | TBD               |
+| @1s     | **0.520**     | TBD               |
+| @5s     | **1.254**     | TBD               |
+| @10s    | **1.422**     | TBD               |
 
 ## Stop Or Delete The VM
 
