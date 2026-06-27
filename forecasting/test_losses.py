@@ -2,7 +2,8 @@ import unittest
 
 import torch
 
-from forecasting.losses import horizon_weights
+from forecasting.config import POSE_DIM
+from forecasting.losses import horizon_weights, mpjpe_loss, velocity_loss
 
 
 class TestHorizonWeights(unittest.TestCase):
@@ -26,13 +27,8 @@ class TestHorizonWeights(unittest.TestCase):
         self.assertTrue(torch.all(w[1:] <= w[:-1] + 1e-9))
 
 
-from forecasting.losses import mpjpe_loss
-from forecasting.config import POSE_DIM
-
-
 class TestWeightedMpjpe(unittest.TestCase):
     def _pair(self, t=10):
-        torch.manual_seed(0)
         target = torch.zeros(2, t, POSE_DIM)
         pred = torch.zeros(2, t, POSE_DIM)
         return pred, target
@@ -62,9 +58,6 @@ class TestWeightedMpjpe(unittest.TestCase):
         self.assertGreater(weighted.item(), plain.item())
 
 
-from forecasting.losses import velocity_loss
-
-
 class TestWeightedVelocity(unittest.TestCase):
     def test_floor_one_equals_unweighted(self):
         torch.manual_seed(2)
@@ -83,6 +76,15 @@ class TestWeightedVelocity(unittest.TestCase):
         plain = velocity_loss(pred, target)
         weighted = velocity_loss(pred, target, weights=horizon_weights(9, floor=0.2))
         self.assertLess(weighted.item(), plain.item())
+
+    def test_early_error_upweighted(self):
+        # a single early position jump -> velocity error concentrated at the start
+        target = torch.zeros(2, 10, POSE_DIM)
+        pred = torch.zeros(2, 10, POSE_DIM)
+        pred[:, 1, :] = 1.0
+        plain = velocity_loss(pred, target)
+        weighted = velocity_loss(pred, target, weights=horizon_weights(9, floor=0.2))
+        self.assertGreater(weighted.item(), plain.item())
 
 
 if __name__ == "__main__":
