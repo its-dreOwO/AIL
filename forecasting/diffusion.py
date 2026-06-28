@@ -36,3 +36,49 @@ class GaussianDiffusion(nn.Module):
         xt = self.q_sample(x0, t, noise)
         pred = denoiser(xt, t)
         return F.mse_loss(pred, noise)
+
+
+@torch.no_grad()
+def ddim_sample(
+    denoiser,
+    diffusion,
+    shape,
+    obs_full_time,
+    mask_time,
+    dct_fn,
+    idct_fn,
+    ddim_steps,
+    device="cpu",
+):
+    B = shape[0]
+    abar = diffusion.alphas_cumprod.to(device)
+    obs_full_time = obs_full_time.to(device)
+    mask_time = mask_time.to(device)
+    obs_latent = dct_fn(obs_full_time)
+
+    X = torch.randn(shape, device=device)
+    seq = torch.linspace(diffusion.timesteps - 1, 0, ddim_steps).round().long().tolist()
+    seq_prev = seq[1:] + [-1]
+
+    for t, t_prev in zip(seq, seq_prev):
+        tb = torch.full((B,), t, device=device, dtype=torch.long)
+        eps = denoiser(X, tb)
+        a_t = abar[t]
+        x0 = (X - (1.0 - a_t).sqrt() * eps) / a_t.sqrt()
+        a_prev = abar[t_prev] if t_prev >= 0 else torch.tensor(1.0, device=device)
+        X = a_prev.sqrt() * x0 + (1.0 - a_prev).sqrt() * eps
+
+        # masked completion: pin observed region at noise level t_prev (clean at end)
+        level = max(t_prev, 0)
+        known_latent = (
+            abar[level].sqrt() * obs_latent
+            + (1.0 - abar[level]).sqrt() * torch.randn_like(obs_latent)
+        )
+        x_time = idct_fn(X)
+        known_time = idct_fn(known_latent)
+        x_time = mask_time * known_time + (1.0 - mask_time) * x_time
+        X = dct_fn(x_time)
+
+    out = idct_fn(X)
+    out = mask_time * obs_full_time + (1.0 - mask_time) * out  # hard pin observed
+    return out

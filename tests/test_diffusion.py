@@ -25,6 +25,37 @@ def test_q_sample_is_clean_at_t0_and_noisy_at_tmax():
     assert (xtmax - x0).abs().mean() > (xt0 - x0).abs().mean()
 
 
+def test_ddim_sample_pins_observed_region_with_full_dct():
+    from forecasting.diffusion import ddim_sample
+
+    # Full (non-truncated) DCT so dct->idct is identity and masking is exact.
+    T, C, L = 8, 3, 8
+    dct_m = torch.linalg.qr(torch.randn(T, T))[0]  # orthonormal TxT
+    idct_m = dct_m.t()
+
+    def dct_fn(x):  # [B,T,C] -> [B,L,C]
+        return torch.einsum("lt,btc->blc", dct_m[:L], x)
+
+    def idct_fn(X):  # [B,L,C] -> [B,T,C]
+        return torch.einsum("tl,blc->btc", idct_m[:, :L], X)
+
+    diff = GaussianDiffusion(timesteps=20)
+    denoiser = lambda xt, t: torch.zeros_like(xt)
+
+    n_in = 4
+    obs = torch.randn(2, T, C)
+    obs[:, n_in:] = 0.0
+    mask = torch.zeros(T, 1)
+    mask[:n_in] = 1.0
+
+    out = ddim_sample(
+        denoiser, diff, (2, L, C), obs, mask, dct_fn, idct_fn, ddim_steps=5
+    )
+    assert out.shape == (2, T, C)
+    assert torch.allclose(out[:, :n_in], obs[:, :n_in], atol=1e-4)
+    assert torch.isfinite(out).all()
+
+
 def test_p_losses_returns_finite_scalar_with_grad():
     diff = GaussianDiffusion(timesteps=50)
 
