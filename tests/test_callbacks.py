@@ -1,7 +1,12 @@
 import numpy as np
 import torch
 
-from forecasting.callbacks import make_simlpe_callback, zero_velocity_callback
+from forecasting.callbacks import (
+    make_scene_simlpe_callback,
+    make_simlpe_callback,
+    zero_velocity_callback,
+)
+from forecasting.scene_features import SCENE_FEATURE_DIM
 
 
 def _make_input(P=2):
@@ -37,3 +42,35 @@ def test_simlpe_callback_shape_and_inversion():
     out = cb(inp)
     assert out.shape == (250, 2, 29, 3)
     assert np.isfinite(out).all()
+
+
+class RecordingSceneModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.scene_shape = None
+
+    def forward(self, x, scene):
+        self.scene_shape = tuple(scene.shape)
+        return x
+
+
+def test_scene_simlpe_callback_shape_and_scene_tensor():
+    class FakeObject:
+        isbox = False
+        location = np.array([2.0, 0.0, 0.0, 0.5], dtype=np.float32)
+        label = np.eye(13, dtype=np.float32)[10]
+
+    class FakeKitchen:
+        def get_environment(self, frame, ignore_oob=True, use_pointcloud=False):
+            return [FakeObject()]
+
+    model = RecordingSceneModel()
+    cb = make_scene_simlpe_callback(model, device="cpu")
+    inp = _make_input(P=1)
+    inp["kitchen"] = FakeKitchen()
+
+    out = cb(inp)
+
+    assert out.shape == (250, 1, 29, 3)
+    assert np.isfinite(out).all()
+    assert model.scene_shape == (1, SCENE_FEATURE_DIM)
