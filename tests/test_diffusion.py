@@ -56,6 +56,44 @@ def test_ddim_sample_pins_observed_region_with_full_dct():
     assert torch.isfinite(out).all()
 
 
+def test_ddim_sample_does_not_explode_at_high_noise_start():
+    # Regression: with the cosine schedule, alphas_cumprod[999] ~= 2.4e-9, so the
+    # DDIM x0 estimate x0 = (X - sqrt(1-abar)*eps)/sqrt(abar) divides by ~5e-5 and
+    # explodes ~20000x at the first sampling step (t=999). Clipping the predicted
+    # x0 to the data range keeps the sampled output near the O(1) data scale.
+    from forecasting.diffusion import ddim_sample
+
+    T, C, L = 16, 3, 8
+    dct_m = torch.linalg.qr(torch.randn(T, T))[0]
+    idct_m = dct_m.t()
+    dct_fn = lambda x: torch.einsum("lt,btc->blc", dct_m[:L], x)
+    idct_fn = lambda X: torch.einsum("tl,blc->btc", idct_m[:, :L], X)
+
+    diff = GaussianDiffusion(timesteps=1000)
+    denoiser = lambda xt, t: torch.zeros_like(xt)
+
+    n_in = 8
+    obs = torch.randn(2, T, C)
+    obs[:, n_in:] = 0.0
+    mask = torch.zeros(T, 1)
+    mask[:n_in] = 1.0
+
+    # Without clipping the future region blows far past the data scale.
+    unclipped = ddim_sample(
+        denoiser, diff, (2, L, C), obs, mask, dct_fn, idct_fn, ddim_steps=10
+    )
+    assert unclipped[:, n_in:].abs().max() > 50.0
+
+    # Clipping the predicted x0 keeps the output bounded near the data scale.
+    clipped = ddim_sample(
+        denoiser, diff, (2, L, C), obs, mask, dct_fn, idct_fn,
+        ddim_steps=10, x0_clip=5.0,
+    )
+    assert torch.isfinite(clipped).all()
+    assert clipped[:, n_in:].abs().max() < 50.0
+    assert torch.allclose(clipped[:, :n_in], obs[:, :n_in], atol=1e-4)
+
+
 def test_p_losses_returns_finite_scalar_with_grad():
     diff = GaussianDiffusion(timesteps=50)
 

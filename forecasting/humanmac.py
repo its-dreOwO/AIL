@@ -47,6 +47,7 @@ class HumanMAC(nn.Module):
     def __init__(
         self, pose_dim=87, window=500, n_in=250, n_coeff=125,
         d_model=512, n_layers=8, n_heads=8, timesteps=1000, ddim_steps=50,
+        x0_clip=50.0,
     ):
         super().__init__()
         self.window = window
@@ -54,6 +55,9 @@ class HumanMAC(nn.Module):
         self.n_out = window - n_in
         self.n_coeff = n_coeff
         self.ddim_steps = ddim_steps
+        # DCT coefficients of the normalized training windows reach ~39 in abs;
+        # 50 bounds the DDIM x0 explosion without clipping any real coefficient.
+        self.x0_clip = x0_clip
 
         dct_m, idct_m = get_dct_matrix(window)
         self.register_buffer("dct_l", torch.tensor(dct_m[:n_coeff], dtype=torch.float32))
@@ -88,5 +92,6 @@ class HumanMAC(nn.Module):
         traj = ddim_sample(
             self.denoiser, self.diffusion, (k, self.n_coeff, pose_dim),
             obs_full, mask, self.dct, self.idct, steps, device=device,
+            x0_clip=self.x0_clip,
         )
         return traj[:, self.n_in :]

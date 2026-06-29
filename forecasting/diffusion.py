@@ -49,6 +49,7 @@ def ddim_sample(
     idct_fn,
     ddim_steps,
     device="cpu",
+    x0_clip=None,
 ):
     B = shape[0]
     abar = diffusion.alphas_cumprod.to(device)
@@ -65,6 +66,11 @@ def ddim_sample(
         eps = denoiser(X, tb)
         a_t = abar[t]
         x0 = (X - (1.0 - a_t).sqrt() * eps) / a_t.sqrt()
+        # Static thresholding: at the first steps abar ~ 0, so the x0 estimate
+        # divides by sqrt(abar) ~ 5e-5 and explodes ~20000x. Clip it back to the
+        # data range so the trajectory stays on-manifold (cf. DDPM/Imagen).
+        if x0_clip is not None:
+            x0 = x0.clamp(-x0_clip, x0_clip)
         a_prev = abar[t_prev] if t_prev >= 0 else torch.tensor(1.0, device=device)
         X = a_prev.sqrt() * x0 + (1.0 - a_prev).sqrt() * eps
 
