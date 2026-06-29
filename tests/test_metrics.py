@@ -1,6 +1,6 @@
 import numpy as np
 
-from forecasting.metrics import calc_mpjpe
+from forecasting.metrics import calc_best_of_k_mpjpe, calc_mpjpe
 
 
 def _entry(offset, target_pid, pids):
@@ -34,3 +34,34 @@ def test_target_pid_selection():
     e["Poses3d_out_pred"][:, 1] += off
     out = calc_mpjpe({"walking": [e]})
     assert out["overall"]["mean"] == 0.0
+
+
+def test_best_of_k_selects_lowest_error_sample_per_entry():
+    e = _entry(np.zeros(3, dtype=np.float32), 7, [7])
+    gt = e["Poses3d_out"]
+    bad = gt + np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    good = gt + np.array([0.1, 0.0, 0.0], dtype=np.float32)
+    e["Poses3d_out_pred_samples"] = np.stack([bad, good], axis=0)
+
+    out = calc_best_of_k_mpjpe({"walking": [e]})
+
+    assert abs(out["overall"]["mean"] - 0.1) < 1e-5
+    assert out["overall"]["best_sample_indices"] == [1]
+    assert out["per_action"]["walking"]["best_sample_indices"] == [1]
+
+
+def test_best_of_k_respects_target_pid_and_masks():
+    e = _entry(np.zeros(3, dtype=np.float32), 9, [7, 9])
+    gt = e["Poses3d_out"]
+    bad = gt.copy()
+    good = gt.copy()
+    bad[:, 1] += np.array([2.0, 0.0, 0.0], dtype=np.float32)
+    good[:, 1] += np.array([0.2, 0.0, 0.0], dtype=np.float32)
+    good[:, 0] += np.array([10.0, 0.0, 0.0], dtype=np.float32)
+    e["Masks_out"][:125, 1] = 0.0
+    e["Poses3d_out_pred_samples"] = np.stack([bad, good], axis=0)
+
+    out = calc_best_of_k_mpjpe({"walking": [e]})
+
+    assert abs(out["overall"]["mean"] - 0.2) < 1e-5
+    assert out["overall"]["best_sample_indices"] == [1]
