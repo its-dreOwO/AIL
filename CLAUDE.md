@@ -6,7 +6,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `hik` is the official **data API + evaluation harness** for the NeurIPS 2023 dataset *"Humans in Kitchens"* (multi-person 3D human-motion forecasting with scene context). It is **not a model** — it ships no neural network. Researchers bring their own forecasting model and plug it into the evaluation protocol. The codebase only loads the dataset, visualizes it, and scores predictions.
 
+**This repo is `github.com/its-dreOwO/AIL`** (origin points there, fresh history). It **vendors** the upstream `hik` harness (by Tanke et al., NeurIPS 2023) as a **read-only dependency** and adds our own forecasting models under `forecasting/`. Treat `hik/`, `testdata/`, `documentation/`, `notebooks/` as vendored — **do not edit them** (incl. the `eval/mpjpe.py::calc_mpjpe` stub; our scoring lives in `forecasting/metrics.py`).
+
 The dataset is four kitchen recordings labelled **A, B, C, D**, captured at **25 Hz**. Almost every API takes a `dataset` ("A".."D") and a `frame` (int).
+
+## Our forecasting work (the `forecasting/` package)
+
+We build forecasting models on top of the vendored harness. Roadmap: **(1) single-person siMLPe baseline** → (2) multi-person social attention → (3) scene-aware → (4) generative. **The target to beat is the zero-velocity ("freeze last pose") baseline: overall MPJPE 1.108** (@1s 0.520, @5s 1.254, @10s 1.422).
+
+- Pose rep: canonical `hik.transforms.utils.normalize3d` at frame 249 (last observed), `denormalize3d` for scoring. Eval callback contract: in `[250,P,29,3]` → out `[250,P,29,3]`. Metric: `forecasting/metrics.py` (`calc_mpjpe`, plus `calc_best_of_k_mpjpe` for the stochastic track).
+- **Compute: never run dataset/training/eval locally** (14 GB RAM OOMs). All heavy runs go to the GCP T4 VM `hik-simlpe-train` (project `project-b9a4f950-85a4-48f0-9ee`, zone `asia-southeast1-b`); start it to train, **stop it after**. Reuse the `forecasting/cache/windows_ABCD_s50.npy` window cache (no rebuild).
+
+### Progress (updated 2026-06-28)
+
+- **Tier 1 — siMLPe: implemented, runs, but loses to zero-velocity.** Three iterations (position decoder, horizon-weighted loss, velocity decoder) all land overall ≥ 1.18. Root cause is structural mean-collapse at the 10 s horizon, not a bug — the pipeline is verified correct.
+- **Tier 3 (partial) — nearest-object scene-conditioned siMLPe: implemented, also loses** (overall 1.1845). Nearest-object features alone aren't enough.
+- **Phase B — HumanMAC stochastic best-of-K: implemented, TRAINING NOW on the T4.** Whole-sequence DCT-domain diffusion (transformer denoiser, masked-completion conditioning), evaluated via best-of-K(50). New modules: `forecasting/diffusion.py`, `forecasting/humanmac.py`, `forecasting/eval_bok.py`; `--model humanmac` in `train.py`/`evaluate.py`. ⚠️ **best-of-K is an ORACLE metric** (uses GT to pick the best of K samples) — always reported alongside the single-sample number; a best-of-K win is not apples-to-apples with the 1.108 deterministic bar.
+- Specs/plans: `docs/superpowers/specs/2026-06-28-humanmac-stochastic-forecasting-design.md`, `docs/superpowers/plans/2026-06-28-humanmac-stochastic-forecasting.md`. Full status: `forecasting/GOAL.md`.
 
 ## Environment & commands
 
@@ -38,7 +54,7 @@ Install from scratch (other machines): `pip install -e .` then `pip install torc
 
 ## Dataset path convention
 
-`examples.py` and `animate.py` default the data dir to `/home/dre/Downloads/hik_dataset/data`, overridable with the `HIK_DATA` env var. The dataset layout (all paths derive from `data/`):
+The **full dataset** lives on a mounted drive at `/mnt/elements/dataset AIL/Humans_in_Kitchen/Humans_in_Kitchen` (note: path has spaces — pass it via the `HIK_DATA` env var, never hardcode). `forecasting/config.py` defaults `HIK_DATA` to this path. The three subdirs sit directly under it (no `data/` wrapper):
 
 - `poses/{dataset}_{pid}_{seqid}.npz` — one file per person-sequence
 - `scenes/{dataset}_scene/{object}.npy` + `.json` — per-frame scene geometry

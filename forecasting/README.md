@@ -39,10 +39,10 @@ Do not hardcode that path in code. Use `HIK_DATA`:
 export HIK_DATA="/mnt/elements/dataset AIL/Humans_in_Kitchen/Humans_in_Kitchen"
 ```
 
-If uploaded to the VM with the command below, the remote path is:
+On the current training VM, the remote path is:
 
 ```bash
-export HIK_DATA="$HOME/Humans_in_Kitchen/Humans_in_Kitchen"
+export HIK_DATA="$HOME/Humans_in_Kitchen"
 ```
 
 ## Upload Dataset To VM
@@ -68,7 +68,7 @@ CLOUDSDK_CONFIG=/tmp/gcloud-config gcloud compute ssh hik-simlpe-train \
   --project=project-b9a4f950-85a4-48f0-9ee \
   --zone=asia-southeast1-b \
   --ssh-key-file=/tmp/google_compute_engine \
-  --command='du -sh ~/Humans_in_Kitchen && find ~/Humans_in_Kitchen/Humans_in_Kitchen -maxdepth 1 -type d -print'
+  --command='du -sh ~/Humans_in_Kitchen && find ~/Humans_in_Kitchen -maxdepth 1 -type d -print'
 ```
 
 ## Connect To VM
@@ -94,7 +94,7 @@ git checkout single-person-simlpe-baseline
 
 pip install -e .
 pip install pytest
-export HIK_DATA="$HOME/Humans_in_Kitchen/Humans_in_Kitchen"
+export HIK_DATA="$HOME/Humans_in_Kitchen"
 ```
 
 Check the environment:
@@ -114,7 +114,7 @@ python -m pytest tests/test_data.py -v -m slow
 ## Evaluate Zero Velocity
 
 ```bash
-export HIK_DATA="$HOME/Humans_in_Kitchen/Humans_in_Kitchen"
+export HIK_DATA="$HOME/Humans_in_Kitchen"
 python -m forecasting.evaluate --dataset A --model zerovel
 ```
 
@@ -130,16 +130,19 @@ overall mean MPJPE: 1.1080
 ## Train siMLPe
 
 ```bash
-export HIK_DATA="$HOME/Humans_in_Kitchen/Humans_in_Kitchen"
+export HIK_DATA="$HOME/Humans_in_Kitchen"
 python -m forecasting.train \
   --datasets A B C D --stepsize 50 --epochs 80 \
-  --lr 5e-4 --vel-weight 0.2 --horizon-floor 0.2
+  --lr 5e-4 --vel-weight 0.2 --horizon-floor 0.2 \
+  --output-mode velocity
 ```
 
 `--horizon-floor` controls the gentle linear loss weighting (1.0 at the first
 predicted frame down to the floor at the last); `--horizon-floor 1.0` recovers
 the old uniform MPJPE. `--vel-weight` scales the velocity term (was hard-wired
-to 1.0 before).
+to 1.0 before). `--output-mode velocity` decodes the model head as per-frame
+velocity increments integrated from the last observed pose; `position` recovers
+the earlier last-frame residual decoder.
 
 Expected output:
 
@@ -151,7 +154,31 @@ Expected output:
 
 ```bash
 export HIK_DATA="$HOME/Humans_in_Kitchen"
-python -m forecasting.evaluate --dataset A --model simlpe --ckpt forecasting/cache/simlpe.pt
+python -m forecasting.evaluate \
+  --dataset A --model simlpe --ckpt forecasting/cache/simlpe.pt \
+  --output-mode velocity
+```
+
+## Train scene-conditioned siMLPe
+
+```bash
+export HIK_DATA="$HOME/Humans_in_Kitchen"
+python -m forecasting.train \
+  --model scene-simlpe \
+  --datasets A B C D --stepsize 50 --epochs 80 \
+  --lr 5e-4 --vel-weight 0.2 --horizon-floor 0.2 \
+  --output-mode position
+```
+
+This writes `forecasting/cache/scene_simlpe.pt` and uses the separate
+`scene_windows_ABCD_s50_v1.npz` cache.
+
+```bash
+export HIK_DATA="$HOME/Humans_in_Kitchen"
+python -m forecasting.evaluate \
+  --dataset A --model scene-simlpe \
+  --ckpt forecasting/cache/scene_simlpe.pt \
+  --output-mode position
 ```
 
 ### Result (2026-06-26, trained A+B+C+D, stepsize 50, 80 epochs, 10,299 windows, Tesla T4)
@@ -197,6 +224,44 @@ position-space) MPJPE rewards regressing toward the mean. The next lever is the
 deferred one from the spec — reframe the model output (predict velocity/deltas
 from the last frame, and/or a shorter autoregressive horizon) rather than tune the
 loss weighting further.
+
+### Result (2026-06-28 retrain — velocity output decoder)
+
+Config: `lr 5e-4`, `vel_weight 0.2`, `horizon_floor 0.2`, `output_mode velocity`,
+otherwise A+B+C+D, stepsize 50, 80 epochs, Tesla T4 (reused the
+`windows_ABCD_s50.npy` cache). The VM dataset root was `$HOME/Humans_in_Kitchen`.
+Target was overall < 1.108 — **not met.**
+
+| horizon | zero-velocity | siMLPe (velocity output) | siMLPe (weighted) |
+|---------|--------------:|-------------------------:|------------------:|
+| overall | **1.108**     | 1.197                    | 1.184             |
+| @1s     | **0.520**     | 0.537                    | 0.572             |
+| @5s     | **1.254**     | 1.318                    | 1.348             |
+| @10s    | **1.422**     | 1.707                    | 1.462             |
+
+Velocity decoding improves short/mid horizon vs the weighted position decoder, but
+the integrated long-horizon drift is much worse and overall still loses to
+zero-velocity. Treat this as the last Tier-1 diagnostic: move next to scene/goal
+conditioning or stochastic best-of-K, not more single-person siMLPe tuning.
+
+### Result (2026-06-28 scene-conditioned siMLPe)
+
+Config: `scene-simlpe`, `output_mode position`, `lr 5e-4`, `vel_weight 0.2`,
+`horizon_floor 0.2`, A+B+C+D, stepsize 50, 80 epochs, Tesla T4. It used the
+separate `scene_windows_ABCD_s50_v1.npz` cache with nearest-object type and
+relative geometry features. Target was overall < 1.108 — **not met.**
+
+| horizon | zero-velocity | scene-conditioned siMLPe |
+|---------|--------------:|-------------------------:|
+| overall | **1.108**     | 1.1845                   |
+| @1s     | **0.520**     | 0.5683                   |
+| @5s     | **1.254**     | 1.3411                   |
+| @10s    | **1.422**     | 1.4485                   |
+
+Nearest-object scene conditioning did not beat zero-velocity overall and was roughly
+on par with the horizon-weighted position decoder. This confirms that raw nearest
+object context alone is too weak; the next scene step should use explicit goal
+inference/anchoring, or switch to a stochastic best-of-K method.
 
 ## Stop Or Delete The VM
 
