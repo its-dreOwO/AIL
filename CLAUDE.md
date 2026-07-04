@@ -26,6 +26,28 @@ We build forecasting models on top of the vendored harness. Roadmap: **(1) singl
   - **Branch/PR:** all forecasting work (siMLPe + scene + HumanMAC + this fix) is on branch `forecasting/simlpe-scene-humanmac` → **PR #1** (`github.com/its-dreOwO/AIL/pull/1`). The old `single-person-simlpe-baseline` branch was renamed/superseded and its stale remote copy deleted.
 - Specs/plans: `docs/superpowers/specs/2026-06-28-humanmac-stochastic-forecasting-design.md`, `docs/superpowers/plans/2026-06-28-humanmac-stochastic-forecasting.md`. Full status: `forecasting/GOAL.md`.
 
+### Current direction (updated 2026-06-30): reproduce HUMOF (ICLR 2026)
+
+Pivoted from our own models to **reproducing HUMOF** (`github.com/scy639/HUMOF`, the SOTA on HIK), cloned as a sibling repo at `/opt/study/ail/HUMOF` (not under this repo). Paper: `/home/dre/Downloads/2506.03753v3.pdf`. **Target = paper Table 1 "Ours" on HIK: Path mean 180.7 mm / Pose mean 90.2 mm** (train A–C, eval D, H=25→F=50, multi-person, 70 epochs). Full state: memory `humof-repro-plan.md`.
+
+**Repro done (2026-07-01):** 70-epoch train on HIK → **path 109.8 / pose 66.8 mm on recording D** (see `results/hik-releaseV0.1/err.csv`). NOT Table-1-comparable — our reconstructed `primary_filterC`/`filterB` gate a different (easier/smaller) eval subset.
+
+### Improve-the-baseline plan (updated 2026-07-04, Approach "C"): for the AIL course
+
+Goal: **improve our own HIK-D subset number** (not beat the paper — absolute numbers aren't comparable) + document a real limitation. Key constraint: a single ~24h from-scratch retrain **can't prove a <~1mm gain** (seed/GPU variance), so front-load levers with **zero retraining confound**. Phased so a bad training run can't sink the deliverable. Spec: `docs/superpowers/specs/2026-07-04-humof-baseline-improvement-design.md`.
+
+- **Phase 0 — subset characterization (near-free finding).** Count test cases our `primary_filterC`/`filterB` admit on D (per action + total) vs. raw dense count. If materially smaller/easier → concrete reproducibility limitation. Run on VM (no local heavy runs).
+- **Phase 1 — inference-time wins (eval-only, provable A/B on identical subset).** (a) **Checkpoint averaging/ensembling** over ckpts 10–70 (still on VM); (b) **test-time rotation averaging** (model already trains with rot-aug). No retraining → any gain is real.
+- **Phase 2 — one architecture change (~24h retrain, upside only).** Lever chosen AFTER Phase 0/1 findings. Leading candidate = paper's own future-work #3: **iterative multi-person refinement** (HHI only sees others' *history*, never their *predicted future* — feed a first-pass prediction back into HHI). Alt if abrupt-motion cases dominate error: velocity/acceleration input features.
+
+- **VM access:** `ssh hikvm` (direct alias, key `~/.ssh/google_compute_engine`). ⚠️ External IP changes on every VM stop/start — refresh `HostName` in `~/.ssh/config` from `gcloud compute instances describe hik-simlpe-train --zone=asia-southeast1-b --format='value(networkInterfaces[0].accessConfigs[0].natIP)'`.
+- **Dataset already on VM** at `~/Humans_in_Kitchen/{poses,scenes,body_models}` (no upload needed).
+- **Env (`humof` conda, py3.9.19):** torch **1.13.0+cu117** (the repo's `torch==1.12.0+cu117` pin is impossible — that wheel never existed; its tv0.14.0/ta0.13.0 pins actually require 1.13.0), numpy 1.24.3, nvcc 11.7 via conda cuda-toolkit, `pip install -e ~/hik`. pvcnn JIT-compiles only after `ln -sfn $CONDA_PREFIX/lib $CONDA_PREFIX/lib64` (fixes `-lcudart`) + `pip install ninja`. Run with `TORCH_CUDA_ARCH_LIST=7.5 CUDA_HOME=$CONDA_PREFIX`.
+- **Preprocessing: SKIP SAST.** Repo's `preprocess.py` is broken (windows then `assert len(tus)==1`). `DatasetHik` only needs `hik_preprocessed/H25F50/hik_{A..D}/tus.pkl` = `(subseq[P,n_frames,29,3], kid, present[P,n_frames])` = raw dense `Scene.poses3d`/`masks` rearranged. Generate via `~/preprocess_hik_direct.py` (uses only `hik.data.scene.Scene`).
+- **BUG — missing functions:** `primary_filterC`/`filterB` are referenced by `dataset_hik.py`/`dataset_hoim3.py` but were never committed (not in HUMOF history nor SAST). Reconstructed in `utils.py` (motion-displacement / social-proximity filters). These gate the eval subset → absolute numbers are NOT like-for-like with Table 1 (our subset evals ~easier).
+- **Config edits in `~/HUMOF`:** `conf0.py` `DATASET_name='hik'`; `conf2.py` `CUDA_VISIBLE_DEVICES='0'` (ships as `'1'` — no GPU on a 1-GPU VM!), `num_workers=8`.
+- **Run:** `setsid bash ~/run_train.sh > ~/train_hik.log`. ~20 min/epoch, GPU-bound, ~24 h for 70 ep. Ckpts every 10 ep → `checkpoints/hik-releaseV0.1/`; eval → `results/hik-releaseV0.1/err.csv`.
+
 ## Environment & commands
 
 A pre-made venv lives at `/opt/study/.venv` (symlinked as `./.venv`); it has all deps installed including `torch`.
