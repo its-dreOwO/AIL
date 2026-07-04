@@ -41,9 +41,11 @@ setup.py             # installs the hik package (pip install -e .)
 
 The current roadmap (see [`docs/superpowers/specs/`](docs/superpowers/specs/)):
 
-1. **Single-person siMLPe baseline** (in progress) — DCT-MLP forecaster, canonical
-   normalization, plugged into `Evaluator.execute3d`, scored with MPJPE against a
-   zero-velocity reference.
+1. **Single-person siMLPe baseline** — implemented under
+   [`forecasting/`](forecasting/) with DCT-MLP forecasting, canonical
+   normalization, `Evaluator.execute3d` integration, and MPJPE scoring against a
+   zero-velocity reference. See [`forecasting/README.md`](forecasting/README.md)
+   for the runbook, baseline numbers, and GPU VM training steps.
 2. Multi-person social attention.
 3. Scene-aware conditioning (kitchen-object context).
 4. Generative (diffusion / CVAE) head for the long horizon.
