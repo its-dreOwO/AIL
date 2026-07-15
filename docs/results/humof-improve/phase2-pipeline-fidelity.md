@@ -75,12 +75,31 @@ noise, so it remains solidly real. What it does mean is that **any eval-side del
 below ~0.03 mm is unresolvable**, and n=2 gives only a crude spread, not a
 standard deviation.
 
+## The train-side filters are verified too (2026-07-15)
+
+The design spec claimed the **train-side** filter reconstruction was unverifiable:
+Phase 0 only recorded counts for D/test, so `primary_filterC` at threshold 0.6 on
+A/B/C had nothing to check against. **That claim was wrong**, and the evidence was
+already on disk: the original run's 55 MB `train_hik.log` was copied off the VM
+before it was deleted, and it logs the train-side counters.
+
+| Counter | Original (`train_hik.log`) | T4 rebuild | |
+|---|---:|---:|:--|
+| `__ct_filtered_1` | 482,397 | 482,397 | ✅ |
+| `__ct_filtered_2` | 1,918 | 1,918 | ✅ |
+| total sub sequences | 34,420 | 34,420 | ✅ |
+
+Three independent counters matching exactly means the reconstruction reproduces
+the original's **behaviour** on the training split, not merely its ballpark. Both
+halves of the filter reconstruction — train (0.6 on A/B/C) and test (0.4 on D) —
+are now verified against recorded ground truth, so `70.pth` was **not** trained on
+a different dataset than the rebuild trains on. This removes the single largest
+item from the five-way confound and is the strongest justification available for
+comparing the gated arm to 109.71.
+
 ## What this does NOT establish
 
-`eval_ckpt` reuses the **original weights**, so it isolates the eval half only. It
-says nothing about the **training-side** reconstruction — notably `primary_filterC`
-at threshold 0.6 on A/B/C, whose counts Phase 0 never recorded, so the train-side
-filter reconstruction remains unverifiable by any static check.
+`eval_ckpt` reuses the **original weights**, so it isolates the eval half only.
 
 It also does not bound **training-side nondeterminism**, which is the noise source
 that actually matters for judging the gated delta: pvcnn's voxelization uses

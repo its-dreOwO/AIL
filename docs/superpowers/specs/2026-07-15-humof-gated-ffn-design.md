@@ -101,10 +101,18 @@ changing torch (which would change numerics). A100 is the ceiling.
 The original `70.pth` was produced by a machine and codebase that **no longer
 exist** (VM deleted 2026-07-15, no snapshot). Comparing the gated arm to 109.71
 changes five things at once: FFN, GPU (T4→A100), Python (3.9→3.10), `hik` package
-source, and **the filter reconstruction**. The last is decisive: `primary_filterC`
-gates the *training* set too (threshold 0.6 on A/B/C), and Phase 0 only gives
-verification targets for **D/test** — so the train-side reconstruction is
-unverifiable. If it differs at all, `70.pth` trained on a different dataset.
+source, and **the filter reconstruction**.
+
+> **RESOLVED 2026-07-15 — this section's central worry was wrong.** It argued the
+> train-side reconstruction was *unverifiable*, since `primary_filterC` also gates
+> the training set (threshold 0.6 on A/B/C) and Phase 0 only recorded targets for
+> D/test — so if it differed at all, `70.pth` trained on a different dataset. But
+> the original run's `train_hik.log` survived on disk and logs the train-side
+> counters. The rebuild reproduces all three **exactly**: `__ct_filtered_1`
+> 482,397, `__ct_filtered_2` 1,918, total sub sequences 34,420. Both halves of the
+> filter reconstruction are now verified against recorded ground truth, which
+> removes the largest item from the confound list. See
+> `docs/results/humof-improve/phase2-pipeline-fidelity.md`.
 
 The GCP T4 re-run resolves this: if it lands near 109.71 on the same hardware, it
 validates that the rebuilt pipeline (re-reconstructed filters + rebuilt env)
