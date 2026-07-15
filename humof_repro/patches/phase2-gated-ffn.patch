@@ -1,0 +1,198 @@
+diff --git a/conf.py b/conf.py
+index 26469c7..2156df8 100644
+--- a/conf.py
++++ b/conf.py
+@@ -56,6 +56,11 @@ GCN_encode_ego:bool = True
+ if DATASET_name=='gta':
+     GCN_encode_ego = False # as 1019-gcnFix1_resB* worse than 1019
+ GCN__num_stage = 5
++
++# Phase 2 experiment: swap the transformer FFN for a param-matched SwiGLU.
++# Driven by an env var so both arms run byte-identical code and differ only here.
++GATED_FFN :bool = bool(int(os.environ.get('HUMOF_GATED_FFN', '0')))
++
+ if 1:
+     DS_SA :bool = True # SE after ds in SA (in res branch
+     DS_CA :bool = True
+@@ -154,6 +159,10 @@ assert APPLY_ds_since<=LEARN_ds_since, 'apply ds epoch range must cover learn ds
+ Preprocess_in_dataloader:bool  =  0
+ 
+ result_id = f"{DATASET_name}-releaseV0.1"
++# Separate checkpoints/results per experiment arm (e.g. 'gated' vs 'base'), so
++# two concurrent runs cannot overwrite each other.
++if os.environ.get('HUMOF_RUN_TAG'):
++    result_id = f"{result_id}-{os.environ['HUMOF_RUN_TAG']}"
+ # result_id= 'tttt34546'
+ print(f"----------------result_id:  {result_id}  -------------------")
+ result_dir=os.path.join(   './results'  , result_id     )
+diff --git a/conf0.py b/conf0.py
+index d67d8d2..e125a70 100644
+--- a/conf0.py
++++ b/conf0.py
+@@ -2,7 +2,8 @@
+ DATASET_name:str = 'hik'
+ # DATASET_name:str = 'hoi'
+ # DATASET_name:str = 'gta'
+-DATASET_name:str = 'humanise'
++# DATASET_name:str = 'humanise'   # ships UNcommented; last assignment wins, so
++                                  # the repo as-shipped runs humanise, not hik.
+ 
+ 
+ 
+diff --git a/conf2.py b/conf2.py
+index ecb7e54..1d9d76f 100644
+--- a/conf2.py
++++ b/conf2.py
+@@ -8,12 +8,17 @@ import os
+ if 0:
+     from . import auto_select_gpu
+ else:
+-    os.environ['CUDA_VISIBLE_DEVICES'] = '1'
++    # ships as '1' -> selects a second GPU that does not exist on a 1-GPU box,
++    # so the repo as-shipped finds no CUDA device.
++    os.environ['CUDA_VISIBLE_DEVICES'] = os.environ.get('HUMOF_GPU_IDX', '0')
+ print(f"{os.environ['CUDA_VISIBLE_DEVICES']=}")
+ 
+-num_workers = 10
++num_workers = int(os.environ.get('HUMOF_NUM_WORKERS', '8'))
+ 
+-save_model_interval=10
++# Bounds how much work a preemption destroys: any restart resumes from the last
++# checkpoint, so this is the max epochs lost (10 = ~2h on an A100). Multiples of
++# 10 are saved either way, so Phase 1's checkpoint-averaging set stays a subset.
++save_model_interval=int(os.environ.get('HUMOF_SAVE_INTERVAL', '10'))
+ MMAP_MODE__gta_joint=None
+ MMAP_MODE__gta_scene="r"
+ SAVE_csv_dftb:bool = 1
+diff --git a/main.py b/main.py
+index a11d8c2..edad297 100644
+--- a/main.py
++++ b/main.py
+@@ -4,9 +4,9 @@ from conf import *
+ from conf2 import *
+ sys.path.append(os.getcwd())
+ # ccc-------------------------------
+-cp_iter = 0    # iter number of ckpt to be loaded. if 0, init model. can be 'auto'
++cp_iter = int(os.environ.get('HUMOF_CP_ITER', '0'))    # iter number of ckpt to be loaded. if 0, init model. can be 'auto'
+ model_path_trained = model_path
+-TRAIN=   bool(    1    )
++TRAIN=   bool(int(os.environ.get('HUMOF_TRAIN', '1')))
+ SHUFFLE_when_train = True
+ SHUFFLE_when_test  = False
+ prefetch_factor=       2       if num_workers>0 else 2
+@@ -178,15 +178,23 @@ def train(epoch,TRAIN:bool,dataset ):
+         shuffle=SHUFFLE
+         drop_last=True
+         
++    def _seed_worker(worker_id):
++        # Each worker subsamples 1000 scene points with numpy. Unseeded, the
++        # workers' numpy state diverges nondeterministically between runs
++        # (~0.03mm of eval noise). Derive it from seed+epoch so the draw is
++        # reproducible across runs but still varies over training.
++        np.random.seed(seed + 1000 * (epoch + 1) + worker_id)
++
+     generator = DataLoader(
+         dataset,batch_size=bs,
+-        collate_fn=collate_fn, 
++        collate_fn=collate_fn,
+         batch_sampler=batch_sampler,
+         shuffle=shuffle,
+         num_workers=num_workers,
+         #    pin_memory=True,
+         drop_last = drop_last,
+         prefetch_factor=prefetch_factor,
++        worker_init_fn=_seed_worker,
+     )
+     if DYN_BS:   
+         batch_sampler.set_epoch(epoch)#  must be set each ep
+@@ -421,6 +429,11 @@ if __name__ == '__main__':
+     torch.manual_seed(seed)
+     if torch.cuda.is_available():
+         torch.cuda.set_device(0)
++        # Ampere (A100) turns TF32 on by default for cuDNN, which would change
++        # precision vs. the T4-trained baseline. Pin it off so the FFN is the
++        # only thing that differs between arms.
++        torch.backends.cudnn.allow_tf32 = False
++        torch.backends.cuda.matmul.allow_tf32 = False
+ 
+ 
+     from conf_torch import *
+diff --git a/models/transformers.py b/models/transformers.py
+index 32b3bbf..efecda3 100644
+--- a/models/transformers.py
++++ b/models/transformers.py
+@@ -7,6 +7,36 @@ import torch.nn as nn
+ import torch.nn.functional as F
+ from .DCTRescalingLayer import *
+ 
++
++class SwiGLUFeedForward(nn.Module):
++    """Param-matched SwiGLU replacement for the plain ReLU FFN.
++
++    The baseline FFN is Linear(d->ff) -> ReLU -> Dropout -> Linear(ff->d), i.e.
++    2*d*ff + ff + d params. SwiGLU needs three projections instead of two, so we
++    scale the hidden width by 2/3 to hold the parameter count fixed:
++    3*d*h + 2h + d with h = round(2*ff/3). Without that, a win would confound
++    gating with ~50% extra FFN capacity.
++
++    Output stays dim_q, so the caller's dct_scale_4_dim2 multiply and the
++    se_ffn DCTRescalingLayer are unaffected.
++
++    Note this bundles two changes vs. the baseline: the gate, and ReLU -> SiLU.
++    A delta cannot be split between them (ReGLU would isolate the gate alone).
++    """
++
++    def __init__(self, dim, ff_dim, dropout):
++        super().__init__()
++        hidden = round(2 * ff_dim / 3)
++        self.hidden = hidden
++        self.w_gate = nn.Linear(dim, hidden)
++        self.w_up = nn.Linear(dim, hidden)
++        self.w_down = nn.Linear(hidden, dim)
++        self.dropout = nn.Dropout(dropout)
++
++    def forward(self, x):
++        return self.w_down(self.dropout(F.silu(self.w_gate(x)) * self.w_up(x)))
++
++
+ class TransformerLayer(nn.Module):
+     def __init__(self, dim_q, dim_kv, num_heads_sa, num_heads_ca, ff_dim, dropout=DROPOUT):
+         super(TransformerLayer, self).__init__()
+@@ -20,12 +50,15 @@ class TransformerLayer(nn.Module):
+                                                 dropout=dropout,  batch_first=True,)
+         
+         # Feedforward network
+-        self.feedforward = nn.Sequential(
+-            nn.Linear(dim_q, ff_dim),
+-            nn.ReLU(),
+-            nn.Dropout(dropout),
+-            nn.Linear(ff_dim, dim_q)
+-        )
++        if GATED_FFN:
++            self.feedforward = SwiGLUFeedForward(dim_q, ff_dim, dropout)
++        else:
++            self.feedforward = nn.Sequential(
++                nn.Linear(dim_q, ff_dim),
++                nn.ReLU(),
++                nn.Dropout(dropout),
++                nn.Linear(ff_dim, dim_q)
++            )
+         if 0:
+             ff_dim_4SA = dim_q*4 # _dimB
+             self.feedforward2 = nn.Sequential(
+diff --git a/utils.py b/utils.py
+index c621871..dd15676 100644
+--- a/utils.py
++++ b/utils.py
+@@ -180,4 +180,9 @@ def find_furthest_point_pair(points   ):
+     index_of_point_pair = ( max_idx[0],max_idx[1] )
+     
+     return max_distance, point_pair, index_of_point_pair
+-    
+\ No newline at end of file
++    
++
++# --- reconstructed HIK filters (primary_filterC / filterB) ---
++# dataset_hik.py calls these but they were never committed to HUMOF. See
++# humof_addons.py for the reconstruction and its verification targets.
++from humof_addons import primary_filterC, filterB
