@@ -134,3 +134,67 @@ training sides, and the honest conclusion is that gating does not measurably hel
 HUMOF at this expansion ratio — which is what theory predicted. A null result,
 reported as a null result, with its noise floor measured rather than assumed, is
 the correct scientific outcome here.
+
+## Appendix — full training specification (gated arm)
+
+Every value below is read from the code/logs, not recalled.
+
+### The change itself
+
+`models/transformers.py::SwiGLUFeedForward`, selected by `HUMOF_GATED_FFN=1`
+(baseline arm runs the byte-identical codebase with the flag at 0):
+
+```python
+hidden = round(2 * ff_dim / 3)
+forward:  w_down( dropout( SiLU(w_gate(x)) * w_up(x) ) )
+```
+
+replacing `Linear(d→ff) → ReLU → Dropout → Linear(ff→d)`.
+
+Applied to all six `TransformerLayer`s (`models/pipelines.py:181-188`):
+
+| Layer | `dim_q` | `dim_kv` | `ff_dim` | SwiGLU hidden | dropout |
+|---|---:|---:|---:|---:|---:|
+| tl0–tl2 | 60 | 512 | 2048 | 1365 | 0.1 |
+| tl3–tl4 | 60 | 256 | 1024 | 683 | 0.2 |
+| tl5 | 60 | 128 | 512 | 341 | 0.2 |
+
+Attention: 4 self-attention + 4 cross-attention heads per layer (unchanged).
+`dim_q = 3·dct_n = 60` (`dct_n = 20`). Total params **10,013,770** vs baseline
+**10,010,990** = **+2,780 (+0.028%)** — both logged by the runs themselves.
+
+### Task / data
+
+- HIK, multi-person: history `t_his=25` frames (1 s @ 25 Hz) → forecast
+  `t_pred=50` frames (2 s); DCT representation with `dct_n=20`.
+- Train: recordings A/B/C → **34,420** sub-sequences after
+  `primary_filterC(0.6)`/`filterB(9.9)`; eval: recording D → **13,162** after
+  `primary_filterC(0.4)`/`filterB(8.0)`. Both counts verified exactly against the
+  original run's logs.
+- Augmentation: random z-axis rotation (`datasets/aug.py`).
+- Scene context: 1000 scene points per window via pvcnn voxelization.
+
+### Optimization
+
+| | |
+|---|---|
+| Optimizer | Adam, lr 5e-4, eps 1e-6, weight decay 1e-6 |
+| LR schedule | lambda decay after 1 fixed epoch; lr at epoch 63 = 5e-5 |
+| Epochs | 70 planned; **0–64 completed** (Modal credit exhausted) |
+| Batching | `DynamicBatchSampler`, max_batch_size 48, max_batch_objs 256 (multi-person); 806 iters/epoch |
+| Loss | joints + root (epoch 63: total 0.210 = joints 0.0795 + root 0.1306) |
+| Seeds | global seed 0; sampler seeded `seed+epoch` (data order deterministic); workers `seed + 1000·(epoch+1) + worker_id` |
+
+### Environment
+
+| | |
+|---|---|
+| Hardware | Modal A100 40 GB, 8 vCPU, 32 GB RAM |
+| Software | Python 3.10, torch 1.13.0+cu117, CUDA 11.7.1, numpy 1.24.3, pvcnn JIT (sm_80) |
+| Precision | FP32; **TF32 explicitly disabled** to match the T4 baseline's semantics |
+| Speed | ~450–470 s/epoch pure training (~7.5 min); ~11 min/epoch incl. periodic evals |
+| Checkpointing | every 2 epochs (`HUMOF_SAVE_INTERVAL=2`) to a Modal Volume, committed every 600 s; restart-safe resume via newest-checkpoint autodetect |
+| Wall clock | started 2026-07-15 21:13 +07, stopped ~2026-07-16 09:15 +07 at epoch 64 |
+
+Repro: `humof_repro/modal_app.py::train --gated --tag gated`, with all HUMOF-side
+edits in `humof_repro/patches/phase2-gated-ffn.patch`.
