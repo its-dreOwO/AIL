@@ -1,21 +1,50 @@
 # Phase 2 — Gated (SwiGLU) FFN: results
 
-**Date:** 2026-07-16 · **Status:** gated arm complete enough to report; baseline re-run still training
+**Date:** 2026-07-16 · **Status:** COMPLETE — all three arms finished
 
 ## Headline
 
 **A param-matched SwiGLU FFN gives a small directional improvement that is not
-statistically significant.** This is a **null result**, and it is the outcome the
+statistically significant — and the effect is comparable in size to simply
+re-running the identical baseline.** This is a **null result**, and it is the
+outcome the
 [design spec](../../superpowers/specs/2026-07-15-humof-gated-ffn-design.md)
 predicted *before* the run: `dim_q=60` vs `ff_dim=2048` is a **34× expansion
 ratio**, and gating buys least exactly where an FFN is that over-provisioned.
 
-| Metric (mm) | Baseline | Gated | Δ | t | |
-|---|---:|---:|---:|---:|:--|
-| Path | 110.290 ± 0.853 | **109.812** ± 0.628 | **−0.478** | −1.19 | not significant |
-| Pose | 67.070 ± 0.253 | **66.876** ± 0.262 | **−0.195** | −1.41 | not significant |
+All three arms on the matched eval window (epochs 51–63, n=7 each, recording D):
 
-Both arms, evals at epochs 51–63 (n=7 each), recording D.
+| Arm | Path (mm) | Pose (mm) |
+|---|---:|---:|
+| Original baseline (T4, original pipeline) | 110.290 ± 0.853 | 67.070 ± 0.253 |
+| **Rebuilt baseline** (T4, rebuilt pipeline, identical arch) | 110.150 ± 1.197 | 67.212 ± 0.323 |
+| **Gated SwiGLU** (A100, rebuilt pipeline) | 109.812 ± 0.628 | 66.876 ± 0.262 |
+
+| Contrast (path) | Δ (mm) | t | Reading |
+|---|---:|---:|:--|
+| rebuilt base − original base ("rebuild fidelity") | **−0.141** | −0.25 | identical within noise ✅ |
+| gated − rebuilt base (FFN + GPU) | −0.337 | −0.66 | not significant |
+| gated − original base (headline) | −0.478 | −1.19 | not significant |
+
+| Contrast (pose) | Δ (mm) | t | Reading |
+|---|---:|---:|:--|
+| rebuilt base − original base | +0.142 | +0.92 | identical within noise ✅ |
+| gated − rebuilt base | −0.337 | −2.14 | borderline; see caveat below |
+| gated − original base | −0.195 | −1.41 | not significant |
+
+The **rebuild-fidelity row is the yardstick**: retraining the *identical*
+architecture on *identical* data moved path by −0.14 mm and pose by +0.14 mm.
+The gated deltas (−0.34 to −0.48 path) are only 2–3× that reproduction noise,
+and every contrast sits inside the arms' own ±0.6–1.2 mm late-epoch spread.
+The pose contrast at t=−2.14 is nominally borderline, but with n=7
+autocorrelated evals per arm and multiple contrasts examined, it does not
+survive honest accounting.
+
+The rebuilt baseline also completed as the **training-side fidelity check**: its
+final-epoch number (109.517) and late-epoch distribution are statistically
+indistinguishable from the original's (109.794), closing the last open question
+about whether the rebuilt pipeline trains equivalently — details in
+[phase2-pipeline-fidelity.md](phase2-pipeline-fidelity.md).
 
 ## Why this is reported as a distribution, not two final numbers
 
@@ -97,8 +126,11 @@ local disk.
 ## Bottom line for the report
 
 The supervisor asked for the numbers, and the numbers are: **−0.48 mm path /
-−0.20 mm pose, not statistically significant.** The lever was applied correctly
-(param-matched, verified to the parameter, on verified-identical data), and the
-honest conclusion is that it does not measurably help HUMOF at this expansion
-ratio — which is what theory predicted. A null result, reported as a null result,
-is the correct scientific outcome here.
+−0.20 mm pose vs the original baseline, not statistically significant — and only
+2–3× the −0.14 mm that re-running the *identical* architecture produced.** The
+lever was applied correctly (param-matched, verified to the parameter, on
+verified-identical data), the pipeline was proven faithful on both the eval and
+training sides, and the honest conclusion is that gating does not measurably help
+HUMOF at this expansion ratio — which is what theory predicted. A null result,
+reported as a null result, with its noise floor measured rather than assumed, is
+the correct scientific outcome here.

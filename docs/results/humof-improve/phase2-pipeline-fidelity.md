@@ -1,6 +1,25 @@
 # Phase 2 — pipeline fidelity: does the rebuilt pipeline still reproduce 109.71?
 
-**Date:** 2026-07-15 · **Status:** eval-side answered; training-side pending the GCP T4 re-run
+**Date:** 2026-07-15, completed 2026-07-16 · **Status:** ANSWERED on both sides — the rebuild is faithful
+
+## Final answer (training side, 2026-07-16)
+
+The GCP T4 baseline re-run finished all 70 epochs: **identical architecture,
+identical data, rebuilt pipeline, same GPU class as the original.**
+
+| | Original baseline | Rebuilt baseline | Δ |
+|---|---:|---:|---:|
+| Final epoch (69) path | 109.794 | 109.517 | −0.277 |
+| Final epoch (69) pose | 66.796 | 66.853 | +0.057 |
+| Late-epoch path (51–63, n=7) | 110.290 ± 0.853 | 110.150 ± 1.197 | −0.141 (t=−0.25) |
+| Late-epoch pose (51–63, n=7) | 67.070 ± 0.253 | 67.212 ± 0.323 | +0.142 (t=+0.92) |
+
+**Statistically indistinguishable.** Combined with the eval-side result below and
+the exact filter-counter matches on both splits, every layer of the rebuild is
+now verified: same data, same architecture, same eval behaviour, same training
+outcome. The −0.14 mm rebuild delta doubles as the **measured training-side
+reproduction noise** — the yardstick against which the gated arm's −0.34/−0.48 mm
+deltas must be read (see [phase2-gated-ffn.md](phase2-gated-ffn.md)).
 
 ## Why this check exists
 
